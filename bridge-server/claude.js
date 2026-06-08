@@ -1,25 +1,18 @@
-// Claude integration for the bridge. Streams a suggestion back chunk-by-chunk and extracts
-// runnable command chips. The API key lives only in this server's environment (.env) — never in the app.
-const Anthropic = require('@anthropic-ai/sdk');
-
-const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
-
-const MODEL = 'claude-opus-4-8';
+// Claude integration for the bridge. Shells out to the local Claude Code CLI (`claude`) in print
+// mode, so it reuses your existing Claude Code login — NO API key required. Streams the reply back
+// chunk-by-chunk and extracts runnable command chips.
+const { spawn } = require('child_process');
 
 function buildSystemPrompt(machineName, context) {
   const recent = context.slice(-50).join('\n');
   return [
-    `You are an assistant embedded in a terminal app called TerminalHub, helping a developer`,
-    `who is working on the machine "${machineName}" over SSH.`,
-    ``,
+    `You are assisting a developer using TerminalHub on the machine "${machineName}" over SSH.`,
     `Recent terminal output (most recent last):`,
     '```',
     recent,
     '```',
-    ``,
-    `Answer briefly and practically. When you suggest shell commands, write each command on`,
-    `its own line exactly as it should be run, with no surrounding backticks or prose on that line.`,
-    `Respond only with your final answer — no exploratory reasoning or meta-commentary.`,
+    `Answer briefly and practically. When you suggest shell commands, put each command on its own`,
+    `line exactly as it should be run, with no surrounding backticks. Respond with the answer only.`,
   ].join('\n');
 }
 
@@ -35,24 +28,49 @@ function extractChips(text) {
   return chips;
 }
 
-// Stream a suggestion. onChunk receives text deltas; resolves with the full text + chips.
-async function streamClaude({ context = [], prompt, machineName = 'this machine' }, onChunk) {
-  const stream = client.messages.stream({
-    model: MODEL,
-    max_tokens: 1024,
-    system: buildSystemPrompt(machineName, context),
-    messages: [{ role: 'user', content: prompt }],
+// Stream a suggestion via the local `claude` CLI. onChunk receives text deltas as they arrive;
+// resolves with the full text + extracted chips. Rejects with a helpful message if `claude` is missing.
+function streamClaude({ context = [], prompt, machineName = 'this machine' }, onChunk) {
+  return new Promise((resolve, reject) => {
+    const system = buildSystemPrompt(machineName, context);
+    const child = spawn('claude', ['--print', '--append-system-prompt', system], {
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let full = '';
+    let errOut = '';
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (d) => {
+      full += d;
+      onChunk(d);
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (d) => {
+      errOut += d;
+    });
+
+    child.on('error', (e) => {
+      if (e.code === 'ENOENT') {
+        reject(new Error('`claude` CLI not found on PATH. Install Claude Code, or start the bridge from a shell where `claude` works.'));
+      } else {
+        reject(e);
+      }
+    });
+
+    child.on('close', (code) => {
+      if (!full && code !== 0) {
+        reject(new Error(errOut.trim() || `claude exited with code ${code}`));
+      } else {
+        resolve({ text: full.trim(), chips: extractChips(full) });
+      }
+    });
+
+    // Send the user's prompt on stdin (avoids arg-length/escaping issues).
+    child.stdin.write(prompt);
+    child.stdin.end();
   });
-
-  stream.on('text', (delta) => onChunk(delta));
-
-  const finalMessage = await stream.finalMessage();
-  const fullText = finalMessage.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('');
-
-  return { text: fullText, chips: extractChips(fullText) };
 }
 
 module.exports = { streamClaude };
