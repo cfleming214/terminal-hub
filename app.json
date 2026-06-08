@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "TerminalHub",
+    "slug": "terminal-hub",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "terminalhub",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#060d1f",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.simpledesign.terminalhub",
+      "icon": "./assets/images/icon.png",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#060d1f",
+        "foregroundImage": "./assets/images/icon.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#060d1f",
+          "image": "./assets/images/icon.png",
+          "imageWidth": 120
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ca4c8312-04d2-4936-be2d-2f78234a9abe"
+      }
+    },
+    "owner": "simple-design"
+  }
+}
