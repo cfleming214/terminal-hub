@@ -1,23 +1,26 @@
 // TerminalHub Mac bridge server.
-// - Spawns a local shell (node-pty) per connection and pipes its output over WebSocket.
+// - Spawns a persistent login shell (Node's built-in child_process — no native deps) per
+//   connection and pipes its stdout/stderr over WebSocket.
 // - Accepts {type:"input"} to run commands and {type:"claude"} to stream a Claude suggestion.
 // - Emits periodic {type:"heartbeat"} with CPU/memory so the app's stat bars stay live.
 // Keep the wire protocol in sync with src/services/bridgeProtocol.ts.
 require('dotenv').config();
 const os = require('os');
+const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
-const pty = require('node-pty');
 const { streamClaude } = require('./claude');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8765;
-const SHELL = process.env.SHELL || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
+const SHELL = process.env.SHELL || (os.platform() === 'win32' ? 'powershell.exe' : '/bin/zsh');
+const USER = process.env.USER || process.env.LOGNAME || 'user';
+const HOST = os.hostname().split('.')[0];
+const PROMPT = `${USER}@${HOST} $ `;
 
 // Strip ANSI escape sequences so the app receives clean text lines.
 const ANSI_RE = /[][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g;
 const stripAnsi = (s) => s.replace(ANSI_RE, '');
 
 function cpuPercent() {
-  // Rough instantaneous load → percentage of available cores.
   const load = os.loadavg()[0];
   const cores = os.cpus().length || 1;
   return Math.min(100, Math.round((load / cores) * 100));
@@ -39,29 +42,45 @@ wss.on('connection', (ws) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   };
 
-  const shell = pty.spawn(SHELL, [], {
-    name: 'xterm-color',
-    cols: 100,
-    rows: 30,
-    cwd: process.env.HOME,
-    env: process.env,
-  });
+  // Persistent non-interactive shell reading commands from stdin. cwd/state persist across commands.
+  let shell;
+  try {
+    shell = spawn(SHELL, [], {
+      cwd: process.env.HOME || process.cwd(),
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    send({ type: 'error', message: `Failed to start shell: ${err.message}` });
+    ws.close();
+    return;
+  }
 
   send({ type: 'connected' });
+  send({ type: 'output', line: { type: 'info', text: `Connected to ${USER}@${HOST}` } });
 
-  // Buffer PTY output and emit one wire line per complete text line.
-  let buffer = '';
-  shell.onData((data) => {
-    buffer += stripAnsi(data);
-    const parts = buffer.split('\n');
-    buffer = parts.pop() ?? '';
-    for (const part of parts) {
-      const text = part.replace(/\r$/, '');
-      send({ type: 'output', line: { type: 'output', text } });
-    }
+  // Buffer each stream and emit one wire line per complete text line.
+  function pipe(stream, lineType) {
+    let buffer = '';
+    stream.setEncoding('utf8');
+    stream.on('data', (data) => {
+      buffer += stripAnsi(data);
+      const parts = buffer.split('\n');
+      buffer = parts.pop() ?? '';
+      for (const part of parts) {
+        send({ type: 'output', line: { type: lineType, text: part.replace(/\r$/, '') } });
+      }
+    });
+  }
+  pipe(shell.stdout, 'output');
+  pipe(shell.stderr, 'output'); // many tools log to stderr normally; keep it readable, not red
+
+  shell.on('exit', (code) => {
+    send({ type: 'output', line: { type: 'info', text: `[shell exited${code != null ? ` (${code})` : ''}]` } });
   });
-
-  shell.onExit(() => send({ type: 'output', line: { type: 'info', text: '[shell exited]' } }));
+  shell.on('error', (err) => {
+    send({ type: 'error', message: `Shell error: ${err.message}` });
+  });
 
   const heartbeat = setInterval(() => {
     send({ type: 'heartbeat', cpu: cpuPercent(), mem: memPercent() });
@@ -76,7 +95,9 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'input') {
-      shell.write(msg.text + '\r');
+      // Echo the command as a prompt line (a piped shell has no TTY echo), then run it.
+      send({ type: 'output', line: { type: 'prompt', promptText: PROMPT, text: msg.text } });
+      if (shell.stdin.writable) shell.stdin.write(msg.text + '\n');
     } else if (msg.type === 'claude') {
       try {
         const result = await streamClaude(

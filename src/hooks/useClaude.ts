@@ -2,10 +2,15 @@
 import { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { bridgeManager } from '@/services/WebSocketManager';
+import { ChatMessage } from '@/types';
+
+// Stable empty reference — returning a fresh `[]` from a Zustand selector triggers an infinite
+// re-render loop (Object.is sees a new array every time).
+const EMPTY_MESSAGES: ChatMessage[] = [];
 
 export function useClaude(machineId: string) {
   const machine = useAppStore((s) => s.machines.find((m) => m.id === machineId));
-  const messages = useAppStore((s) => s.claudeChats[machineId] ?? []);
+  const messages = useAppStore((s) => s.claudeChats[machineId] ?? EMPTY_MESSAGES);
   const useMock = useAppStore((s) => s.settings.useMockBridge);
 
   const addChatMessage = useAppStore((s) => s.addChatMessage);
