@@ -20,8 +20,10 @@ You should see:
 TerminalHub bridge listening on ws://0.0.0.0:8765 (shell: /bin/zsh)
 ```
 
-> `node-pty` builds a native module on install — Xcode command-line tools are required on macOS
-> (`xcode-select --install`).
+> Pure JavaScript — no native modules to compile, just `ws` + `@anthropic-ai/sdk` + `dotenv`.
+> Uses a persistent shell via Node's built-in `child_process` (commands and their state, like `cd`,
+> persist across the session). Full-screen TUI programs like `vim`/`top` aren't supported since there's
+> no real PTY — run those at the Mac directly.
 
 ## Connect the app
 
